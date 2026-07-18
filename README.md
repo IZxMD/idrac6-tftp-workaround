@@ -1,7 +1,5 @@
 # iDRAC6 Firmware Update via Web-Upload (TFTP Workaround)
 
-description 100% AI written, code 60%, error fixing 20%
-
 A single script that flashes iDRAC6 firmware over HTTPS/TLS 1.0, bypassing
 the broken TFTP client found in old iDRAC6 firmware (observed on 1.98,
 likely other early revisions too). No browser, no Java Web Start, no TFTP
@@ -69,6 +67,36 @@ to the env file (default is 443). The poll intervals and timeouts can be
 overridden with `IDRAC_*` environment variables if you ever need to (see the
 top of the script).
 
+### Optional: back up the current config first
+
+`idrac_flash.py` always sends `preConfig=on`, which keeps your iDRAC's
+configuration through the flash, but that's preservation during the flash,
+not a backup you could restore from later. `idrac_backup_config.py` is a
+separate, optional script that reads the current config over SSH
+(`racadm getconfig -g <group>` for network, users, RAC security tuning,
+serial/console, SNMP and IPMI settings) and saves it to a local text file,
+so you have your own copy before touching firmware:
+
+```
+python idrac_backup_config.py .env backup.cfg
+python idrac_flash.py .env firmimg.d6
+```
+
+This is the one script in the repo with a dependency: it talks racadm over
+SSH instead of the web interface, which needs `paramiko==2.11.0` specifically
+(newer paramiko versions are known to fail against iDRAC6's old SSH
+algorithms). Install it with:
+
+```
+pip install paramiko==2.11.0
+```
+
+It's a best-effort plain-text snapshot for human reference and disaster
+recovery, not a restorable Lifecycle Controller export (iDRAC6 predates that
+feature). If a config group comes back empty, the script warns you and names
+the group, since your firmware revision may use slightly different group
+names than the ones this script checks by default.
+
 **Note:** the script confirms the iDRAC card itself came back online with
 the new firmware. It does *not* check the host server's power state. An
 iDRAC firmware flash only affects the management card, not the server
@@ -95,6 +123,13 @@ It generates a throwaway self-signed cert, then runs `idrac_flash.py` against
 the mock through the happy path plus the failure cases (rejected commit,
 post-reboot version mismatch, wrong password, unreachable host) and checks
 the exit code of each.
+
+`idrac_backup_config.py` has its own test in the same style, against a mock
+SSH/racadm shell instead of a mock web server (needs `paramiko==2.11.0`):
+
+```
+bash tests/run_test_backup.sh
+```
 
 ## The problem
 
@@ -177,6 +212,9 @@ without issue.
   `data?get=`/`data?set=` endpoints referenced on the update page. Only
   needed if a different iDRAC6 firmware version changes something and
   `idrac_flash.py` needs updating to match.
+- `idrac_backup_config.py <envfile> [output.cfg]` — optional pre-flash config
+  backup over SSH/racadm. See "Optional: back up the current config first"
+  above. The only script here with a third-party dependency (`paramiko`).
 
 ## Security considerations
 
@@ -187,6 +225,8 @@ without issue.
   connection has **no protection against man-in-the-middle attacks**. Only
   run this against an iDRAC on a trusted, isolated management network (e.g.
   its own VLAN), never across the open internet or an untrusted network.
+  `idrac_backup_config.py` makes the same trade-off on the SSH side
+  (`AutoAddPolicy`, no host key verification) for the same reason.
 - Your iDRAC password is read from `.env` and sent in the login request.
   Keep `.env` out of version control — this repo's `.gitignore` already
   excludes it, but double-check before pushing if you copy these scripts
@@ -194,7 +234,9 @@ without issue.
 - `idrac_flash_log.txt` can contain internal iDRAC state; the script never
   logs your password or session cookie, but treat the log as operational
   data for your own eyes rather than something to attach to a public bug
-  report or forum post.
+  report or forum post. The same applies to whatever `idrac_backup_config.py`
+  writes out: it's your actual network/user/alerting configuration, treat it
+  like the credentials file, not something to paste into a public issue.
 
 ## Disclaimer
 

@@ -5,6 +5,10 @@
 *_log.txt
 idrac_flash_log.txt
 
+# Config backups contain your actual network/user/alerting configuration
+backup*.cfg
+idrac_config_backup.cfg
+
 # Firmware images are large binary Dell downloads, not source — don't commit them
 *.d6
 *.EXE

@@ -4,6 +4,31 @@ All notable changes to this project are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-07-18
+
+Adds an optional pre-flash config backup, prompted by a Reddit comment
+pointing out that `preConfig=on` preserves the config through the flash, but
+that's not the same thing as a restorable backup.
+
+### Added
+- `idrac_backup_config.py` (1.0.1): a separate, optional script that reads
+  the current iDRAC config over SSH (`racadm getconfig -g <group>` for
+  network, users, RAC security tuning, serial/console, SNMP and IPMI
+  settings) and saves it to a local text file before you flash anything.
+  This is the only script in the repo with a third-party dependency
+  (`paramiko==2.11.0` specifically; newer versions fail against iDRAC6's old
+  SSH algorithms). `cfgUserAdmin` is read per user slot (`-i 1` through
+  `-i 16`), since real iDRAC6 hardware treats it as an indexed group and
+  rejects a plain `-g cfgUserAdmin` call with "ERROR: The indexed group
+  specified requires -i <index>" (confirmed against real hardware, not the
+  mock). Warns by group name if a group comes back empty or errors, in case
+  your firmware revision uses different group names.
+- `tests/mock_ssh_idrac.py` + `tests/run_test_backup.sh`: the same
+  no-hardware-needed testing approach as the flash script, against a mock
+  SSH/racadm shell instead of a mock web server, including a scenario for
+  the indexed `cfgUserAdmin` behavior above.
+- `--version` flag on `idrac_backup_config.py`.
+
 ## [1.1.0] - 2026-07-18
 
 Robustness and verification pass, based on an external code review. The flash
