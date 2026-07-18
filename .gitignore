@@ -1,0 +1,15 @@
+# Real credentials — never commit these, use .env.example as the template
+.env
+
+# Log files can contain internal state/session info from your own iDRAC
+*_log.txt
+idrac_flash_log.txt
+
+# Firmware images are large binary Dell downloads, not source — don't commit them
+*.d6
+*.EXE
+*.exe
+
+# Python
+__pycache__/
+*.pyc
