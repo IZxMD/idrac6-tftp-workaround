@@ -7,6 +7,62 @@ server required — and no babysitting either: it logs in, uploads, triggers
 the flash, watches it through the reboot, and confirms the new version by
 itself.
 
+## Usage
+
+1. Extract the `.d6` firmware image from Dell's `.EXE` package (the ESM/
+   iDRAC firmware download — 7-Zip or a similar archive tool can usually
+   pull `payload/firmimg.d6` straight out of it, or run the `.EXE` on
+   Windows and grab it from the extraction temp folder).
+2. Copy `.env.example` to `.env` and fill in your iDRAC's IP, username, and
+   password (`key:value` format, one per line — not `KEY=VALUE`).
+3. Run it:
+   ```
+   python idrac_flash.py .env firmimg.d6
+   ```
+
+Example output:
+
+```
+=== iDRAC6 flash: firmimg.d6 (56.8 MB) -> 192.168.1.100 ===
+Logging in...
+Login OK.
+Uploading firmware image (this can take a few minutes)...
+Uploading... 10%
+Uploading... 20%
+...
+Upload complete in 178s.
+Waiting for image to be staged...
+Image staged and validated.
+Triggering flash commit...
+Flashing in progress — this will end with the iDRAC rebooting itself...
+fwProgress=30
+fwProgress=70
+iDRAC stopped responding — it's rebooting into the new firmware now.
+Waiting for the iDRAC to come back online (this can take a few minutes)...
+...still rebooting (30s elapsed)
+...still rebooting (60s elapsed)
+=== iDRAC is back online. ===
+Reported iDRAC firmware version: 2.92 (Build 05)
+Total run time: 412s
+```
+
+Full detail (every request/response, not just the summary lines above) also
+goes to `idrac_flash_log.txt` next to the script, in case something needs
+debugging.
+
+**Note:** the script confirms the iDRAC card itself came back online with
+the new firmware. It does *not* check the host server's power state — an
+iDRAC firmware flash only affects the management card, not the server
+chassis, so there's nothing for it to check there. If you separately care
+whether the server stayed powered off/on through this (e.g. because you're
+away and don't want to come home to a server that turned itself on), check
+that on your own via `racadm serveraction powerstatus` over SSH — that's a
+different auth path (SSH/racadm, not this script's web/HTTPS one) and
+outside the scope of this repo.
+
+No third-party dependencies — everything uses Python's standard library
+(`ssl`, `socket`, `re`, `urllib.parse`).
+
 ## The problem
 
 The documented way to update an iDRAC6's firmware is:
@@ -78,68 +134,12 @@ without issue.
 7. **Verify** — reads `spfwVer` from the freshly-rebooted iDRAC and prints
    it as the final result.
 
-## Usage
-
-1. Extract the `.d6` firmware image from Dell's `.EXE` package (the ESM/
-   iDRAC firmware download — 7-Zip or a similar archive tool can usually
-   pull `payload/firmimg.d6` straight out of it, or run the `.EXE` on
-   Windows and grab it from the extraction temp folder).
-2. Copy `.env.example` to `.env` and fill in your iDRAC's IP, username, and
-   password (`key:value` format, one per line — not `KEY=VALUE`).
-3. Run it:
-   ```
-   python idrac_flash.py .env firmimg.d6
-   ```
-
-Example output:
-
-```
-=== iDRAC6 flash: firmimg.d6 (56.8 MB) -> 192.168.1.100 ===
-Logging in...
-Login OK.
-Uploading firmware image (this can take a few minutes)...
-Uploading... 10%
-Uploading... 20%
-...
-Upload complete in 178s.
-Waiting for image to be staged...
-Image staged and validated.
-Triggering flash commit...
-Flashing in progress — this will end with the iDRAC rebooting itself...
-fwProgress=30
-fwProgress=70
-iDRAC stopped responding — it's rebooting into the new firmware now.
-Waiting for the iDRAC to come back online (this can take a few minutes)...
-...still rebooting (30s elapsed)
-...still rebooting (60s elapsed)
-=== iDRAC is back online. ===
-Reported iDRAC firmware version: 2.92 (Build 05)
-Total run time: 412s
-```
-
-Full detail (every request/response, not just the summary lines above) also
-goes to `idrac_flash_log.txt` next to the script, in case something needs
-debugging.
-
-**Note:** the script confirms the iDRAC card itself came back online with
-the new firmware. It does *not* check the host server's power state — an
-iDRAC firmware flash only affects the management card, not the server
-chassis, so there's nothing for it to check there. If you separately care
-whether the server stayed powered off/on through this (e.g. because you're
-away and don't want to come home to a server that turned itself on), check
-that on your own via `racadm serveraction powerstatus` over SSH — that's a
-different auth path (SSH/racadm, not this script's web/HTTPS one) and
-outside the scope of this repo.
-
 ## Other files
 
 - `idrac_web_explore.py <envfile>` — helper that logs in and lists the
   `data?get=`/`data?set=` endpoints referenced on the update page. Only
   needed if a different iDRAC6 firmware version changes something and
   `idrac_flash.py` needs updating to match.
-
-No third-party dependencies — everything uses Python's standard library
-(`ssl`, `socket`, `re`, `urllib.parse`).
 
 ## Security considerations
 
