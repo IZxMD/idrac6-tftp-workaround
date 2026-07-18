@@ -1,5 +1,7 @@
 # iDRAC6 Firmware Update via Web-Upload (TFTP Workaround)
 
+description 100% AI written, code 60%, error fixing 20%
+
 A single script that flashes iDRAC6 firmware over HTTPS/TLS 1.0, bypassing
 the broken TFTP client found in old iDRAC6 firmware (observed on 1.98,
 likely other early revisions too). No browser, no Java Web Start, no TFTP
