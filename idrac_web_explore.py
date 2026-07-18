@@ -2,8 +2,8 @@
 Explore an iDRAC6 web interface: log in and find the firmware-update pages.
 
 Useful if Dell changes something in a future firmware revision and the
-data?get=/data?set= endpoints used by idrac_web_fwupdate.py /
-idrac_commit_flash.py need to be rediscovered.
+data?get=/data?set= endpoints used by idrac_flash.py need to be
+rediscovered.
 
 Usage: python idrac_web_explore.py <envfile>
 

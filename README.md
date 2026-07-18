@@ -3,18 +3,18 @@
 A single script that flashes iDRAC6 firmware over HTTPS/TLS 1.0, bypassing
 the broken TFTP client found in old iDRAC6 firmware (observed on 1.98,
 likely other early revisions too). No browser, no Java Web Start, no TFTP
-server required — and no babysitting either: it logs in, uploads, triggers
-the flash, watches it through the reboot, and confirms the new version by
-itself.
+server required, and no babysitting either: it logs in, uploads, triggers
+the flash, watches it through the reboot, and then verifies the running
+firmware actually changed to the version that was flashed.
 
 ## Usage
 
 1. Extract the `.d6` firmware image from Dell's `.EXE` package (the ESM/
-   iDRAC firmware download — 7-Zip or a similar archive tool can usually
+   iDRAC firmware download; 7-Zip or a similar archive tool can usually
    pull `payload/firmimg.d6` straight out of it, or run the `.EXE` on
    Windows and grab it from the extraction temp folder).
 2. Copy `.env.example` to `.env` and fill in your iDRAC's IP, username, and
-   password (`key:value` format, one per line — not `KEY=VALUE`).
+   password (`key:value` format, one per line, not `KEY=VALUE`).
 3. Run it:
    ```
    python idrac_flash.py .env firmimg.d6
@@ -23,45 +23,76 @@ itself.
 Example output:
 
 ```
-=== iDRAC6 flash: firmimg.d6 (56.8 MB) -> 192.168.1.100 ===
+=== idrac_flash.py 1.1.0 ===
+Image: firmimg.d6 (56.8 MB) -> 192.168.1.100:443
+Image SHA-256: 3f2a...c91b
 Logging in...
 Login OK.
+Current firmware (before): 1.98 (Build 06)
 Uploading firmware image (this can take a few minutes)...
 Uploading... 10%
 Uploading... 20%
 ...
 Upload complete in 178s.
 Waiting for image to be staged...
-Image staged and validated.
+Image staged and validated. Target version: 2.92 (Build 05)
 Triggering flash commit...
-Flashing in progress — this will end with the iDRAC rebooting itself...
-fwProgress=30
-fwProgress=70
-iDRAC stopped responding — it's rebooting into the new firmware now.
+Flash commit accepted. Flashing now; the iDRAC will reboot itself...
+fwProgress=30 state=4
+fwProgress=70 state=4
+iDRAC stopped responding; it's rebooting into the new firmware now.
 Waiting for the iDRAC to come back online (this can take a few minutes)...
 ...still rebooting (30s elapsed)
 ...still rebooting (60s elapsed)
 === iDRAC is back online. ===
-Reported iDRAC firmware version: 2.92 (Build 05)
+Firmware before update: 1.98 (Build 06)
+Firmware after update:  2.92 (Build 05)
+Target (staged image):  2.92 (Build 05)
 Total run time: 412s
+Verification: SUCCESS - running firmware matches the flashed image.
 ```
 
-Full detail (every request/response, not just the summary lines above) also
-goes to `idrac_flash_log.txt` next to the script, in case something needs
-debugging.
+The script exits `0` only on a verified success (the post-reboot version
+matches the image that was staged). It exits non-zero and says so if the
+upload or the flash commit is rejected, if the iDRAC never reboots, or if it
+comes back on the wrong version, so you never get a false "done" on a flash
+that did not actually take. Full detail (every request/response) also goes to
+`idrac_flash_log.txt` next to the script.
+
+Before uploading it prints the SHA-256 of the `.d6` file so you can check it
+against Dell's published checksum for the firmware package.
+
+If your iDRAC's web interface is on a non-standard port, add a `port:` line
+to the env file (default is 443). The poll intervals and timeouts can be
+overridden with `IDRAC_*` environment variables if you ever need to (see the
+top of the script).
 
 **Note:** the script confirms the iDRAC card itself came back online with
-the new firmware. It does *not* check the host server's power state — an
+the new firmware. It does *not* check the host server's power state. An
 iDRAC firmware flash only affects the management card, not the server
 chassis, so there's nothing for it to check there. If you separately care
 whether the server stayed powered off/on through this (e.g. because you're
 away and don't want to come home to a server that turned itself on), check
-that on your own via `racadm serveraction powerstatus` over SSH — that's a
+that on your own via `racadm serveraction powerstatus` over SSH; that's a
 different auth path (SSH/racadm, not this script's web/HTTPS one) and
 outside the scope of this repo.
 
-No third-party dependencies — everything uses Python's standard library
-(`ssl`, `socket`, `re`, `urllib.parse`).
+No third-party dependencies; everything uses Python's standard library
+(`ssl`, `socket`, `re`, `hashlib`, `urllib.parse`).
+
+## Testing
+
+The `tests/` folder ships a small mock iDRAC server so the whole flow can be
+exercised without real hardware or network access:
+
+```
+bash tests/run_test.sh
+```
+
+It generates a throwaway self-signed cert, then runs `idrac_flash.py` against
+the mock through the happy path plus the failure cases (rejected commit,
+post-reboot version mismatch, wrong password, unreachable host) and checks
+the exit code of each.
 
 ## The problem
 
@@ -125,14 +156,18 @@ without issue.
    just watching network traffic. The web UI's `submitFlash()` JS function
    does exactly this sequence: `GET /data?set=fwUpdateState:4`, then
    `GET /data?set=fwUpdate:1`. The `:1` on `fwUpdate` means "keep the
-   existing configuration" — omitting it returns `Bad request format`.
+   existing configuration"; omitting it returns `Bad request format`. The
+   script checks both responses and aborts if the iDRAC rejects the commit.
 5. **Monitor the flash** — polls `fwProgress` (30 -> 70 -> ...) until the
    iDRAC drops the connection as it writes the new firmware and reboots
-   itself (roughly 3-5 minutes).
-6. **Wait for the reboot** — retries logging back in every 15s until the
-   iDRAC responds again.
-7. **Verify** — reads `spfwVer` from the freshly-rebooted iDRAC and prints
-   it as the final result.
+   itself (roughly 3-5 minutes). A dropped connection is only treated as a
+   reboot once there's actual evidence the flash started, so a transient
+   network blip isn't mistaken for success.
+6. **Wait for the reboot** — retries logging back in until the iDRAC
+   responds again.
+7. **Verify** — reads `spfwVer` after the reboot and compares it against the
+   version the staged image reported in step 3. It reports SUCCESS only if
+   they match; a wrong-version comeback is flagged as a failure.
 
 ## Other files
 
