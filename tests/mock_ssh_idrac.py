@@ -11,6 +11,9 @@ Scenarios:
     happy   (default) every known group returns plausible config lines,
             cfgUserAdmin correctly requires -i <index> like real iDRAC6
     partial one group (cfgIpmiLan) returns nothing, to test the WARNING path
+    slow    one group's output is sent in two chunks with a pause between
+            them (longer than the old settle window), then the prompt, to
+            check the reader waits for the prompt instead of truncating
 """
 import socket
 import sys
@@ -92,7 +95,17 @@ def handle_client(client_sock, host_key):
                 continue
             print(f"[mock-ssh] got command: {cmd!r}")
             reply = handle_command(cmd)
-            chan.send(reply + "\r\n$ ")
+            if SCENARIO == "slow" and "-g cfgRacTuning" in cmd and reply:
+                # Send the reply in two halves with a pause longer than the old
+                # 2.5s settle window, then the prompt. A reader that ends on a
+                # quiet period alone would truncate here; one that waits for the
+                # prompt captures the whole thing.
+                mid = len(reply) // 2
+                chan.send(reply[:mid])
+                time.sleep(3.0)
+                chan.send(reply[mid:] + "\r\n$ ")
+            else:
+                chan.send(reply + "\r\n$ ")
     chan.close()
     transport.close()
 

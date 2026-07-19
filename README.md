@@ -23,7 +23,7 @@ firmware actually changed to the version that was flashed.
 Example output:
 
 ```
-=== idrac_flash.py 1.3.0 ===
+=== idrac_flash.py 1.4.0 ===
 Image: firmimg.d6 (56.8 MB) -> 192.168.1.100:443
 Image SHA-256: 3f2a...c91b
 Logging in...
@@ -67,6 +67,14 @@ to the env file (default is 443). The poll intervals and timeouts can be
 overridden with `IDRAC_*` environment variables if you ever need to (see the
 top of the script).
 
+The upload is only accepted if the iDRAC reports back at least as many bytes
+as the image you sent (a partial transfer, the exact TFTP failure this tool
+exists to route around, is caught and aborts instead of flashing a truncated
+image). If the iDRAC's update semaphore is non-zero when you start (another
+update in progress, or a stale lock from an earlier aborted attempt), the
+flash aborts by default; clear it with `racadm racreset`, or pass `--force`
+to flash anyway.
+
 ### Optional: back up the current config first
 
 `idrac_flash.py` always sends `preConfig=on`, which keeps your iDRAC's
@@ -109,7 +117,9 @@ It's a best-effort plain-text snapshot for human reference and disaster
 recovery, not a restorable Lifecycle Controller export (iDRAC6 predates that
 feature). If a config group comes back empty or errors, the script warns you
 and names the group, since your firmware revision may use slightly different
-group names than the ones this script checks by default.
+group names than the ones this script checks by default. On POSIX the backup
+file is written with `0600` (owner-only) permissions, since it contains your
+network, user, SNMP and IPMI configuration.
 
 **Note:** the script confirms the iDRAC card itself came back online with
 the new firmware. It does *not* check the host server's power state. An
@@ -121,8 +131,10 @@ that on your own via `racadm serveraction powerstatus` over SSH; that's a
 different auth path (SSH/racadm, not this script's web/HTTPS one) and
 outside the scope of this repo.
 
-No third-party dependencies; everything uses Python's standard library
-(`ssl`, `socket`, `re`, `hashlib`, `urllib.parse`).
+`idrac_flash.py` itself has no third-party dependencies; it uses only Python's
+standard library (`ssl`, `socket`, `re`, `hashlib`, `urllib.parse`). The
+optional `idrac_backup_config.py` is the only script that needs one
+(`paramiko`), and only when you actually run it.
 
 ## Testing
 
@@ -135,11 +147,14 @@ bash tests/run_test.sh
 
 It generates a throwaway self-signed cert, then runs `idrac_flash.py` against
 the mock through the happy path plus the failure cases (rejected commit,
-post-reboot version mismatch, wrong password, unreachable host) and checks
-the exit code of each.
+post-reboot version mismatch, truncated upload, non-zero update semaphore with
+and without `--force`, `--backup`, wrong password, unreachable host) and
+checks the exit code of each.
 
 `idrac_backup_config.py` has its own test in the same style, against a mock
-SSH/racadm shell instead of a mock web server (needs `paramiko==2.11.0`):
+SSH/racadm shell instead of a mock web server (needs `paramiko==2.11.0`),
+covering the happy path, the indexed `cfgUserAdmin` group, an empty-group
+warning, and slow blockwise output that arrives in chunks:
 
 ```
 bash tests/run_test_backup.sh
@@ -239,8 +254,13 @@ without issue.
   connection has **no protection against man-in-the-middle attacks**. Only
   run this against an iDRAC on a trusted, isolated management network (e.g.
   its own VLAN), never across the open internet or an untrusted network.
-  `idrac_backup_config.py` makes the same trade-off on the SSH side
-  (`AutoAddPolicy`, no host key verification) for the same reason.
+  `idrac_backup_config.py` accepts the SSH host key on first connect
+  (`AutoAddPolicy`, no host key verification). Unlike the TLS side, this one
+  is a deliberate simplification rather than a hard limit: an iDRAC6's SSH
+  host key could in principle be pinned. It's left unverified on purpose,
+  because the tool already assumes the trusted, isolated management network
+  above; if that assumption doesn't hold for you, verify the fingerprint out
+  of band.
 - Your iDRAC password is read from `.env` and sent in the login request.
   Keep `.env` out of version control — this repo's `.gitignore` already
   excludes it, but double-check before pushing if you copy these scripts

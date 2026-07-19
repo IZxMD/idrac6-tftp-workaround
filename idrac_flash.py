@@ -10,7 +10,7 @@ possibly other early revisions) that aborts large TFTP transfers after a
 few MB. See README.md for the full root-cause analysis and background.
 
 Usage:
-    python idrac_flash.py <envfile> <firmware_image> [--backup]
+    python idrac_flash.py <envfile> <firmware_image> [--backup] [--force]
     python idrac_flash.py --version
 
 Example:
@@ -23,6 +23,12 @@ script, so idrac_backup_config.py's paramiko dependency never touches this
 script's own imports. If that script isn't runnable (e.g. paramiko missing),
 the flash is aborted with its error message; run without --backup to skip
 the check and just flash.
+
+--force: proceed even if the iDRAC's update semaphore is non-zero (another
+update may be in progress, or a previous one did not release cleanly). By
+default a non-zero semaphore aborts; --force downgrades it to a warning. A
+stale lock after an aborted TFTP attempt is the usual reason you'd need it;
+racadm racreset also clears it.
 
 envfile format (key:value per line, NOT key=value):
     ip:192.168.1.100
@@ -54,10 +60,23 @@ from urllib.parse import quote_plus
 # silence the expected deprecation notice so it doesn't clutter every run.
 warnings.filterwarnings("ignore", message=r".*TLSv1.*", category=DeprecationWarning)
 
-__version__ = "1.3.0"
+__version__ = "1.4.0"
+
+
+def _restrict(path):
+    """Best-effort chmod 0600. The log/backup can contain internal iDRAC
+    state and config, so keep them owner-only on POSIX. No-op / harmless on
+    Windows, which doesn't honor these bits."""
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-LOG = open(os.path.join(HERE, "idrac_flash_log.txt"), "a", buffering=1, encoding="utf-8")
+_LOG_PATH = os.path.join(HERE, "idrac_flash_log.txt")
+LOG = open(_LOG_PATH, "a", buffering=1, encoding="utf-8")
+_restrict(_LOG_PATH)
 
 # Port of the iDRAC web interface. Overridable via a "port" key in the env
 # file (default 443); mainly useful for testing against a local mock.
@@ -182,7 +201,16 @@ def http(host, method, path, headers=None, body=None, timeout=30, chunk=65536, p
             except (socket.timeout, TimeoutError):
                 # A read timeout mid-response is not a clean end; surface it.
                 raise
-            except OSError:
+            except ConnectionResetError:
+                # A reset is a real failure, not an end-of-response; surface it
+                # so e.g. a half-received flash-commit reply isn't parsed as OK.
+                raise
+            except (ssl.SSLError, OSError):
+                # iDRAC6's ancient TLS 1.0 stack routinely closes without a
+                # clean close_notify (unexpected-EOF SSLError) instead of a
+                # zero-length read. On this hardware that IS the normal end of
+                # a "Connection: close" response, so treat it as EOF.
+                # ponytail: reset is re-raised above; everything else = EOF.
                 break
             if not data:
                 break
@@ -241,9 +269,10 @@ def main():
         sys.exit(0)
 
     do_backup = "--backup" in sys.argv[1:]
-    args = [a for a in sys.argv[1:] if a != "--backup"]
+    force = "--force" in sys.argv[1:]
+    args = [a for a in sys.argv[1:] if a not in ("--backup", "--force")]
     if len(args) != 2:
-        print(f"Usage: python {os.path.basename(__file__)} <envfile> <firmware_image> [--backup]")
+        print(f"Usage: python {os.path.basename(__file__)} <envfile> <firmware_image> [--backup] [--force]")
         print(f"       python {os.path.basename(__file__)} --version")
         sys.exit(2)
 
@@ -301,11 +330,14 @@ def main():
     log(f"fwSemStatus: {sem_txt.strip()}")
     sem = re.search(r"<fwSemStatus>(\d+)</fwSemStatus>", sem_txt)
     if sem and sem.group(1) != "0":
-        status(f"WARNING: the iDRAC reports an update semaphore of {sem.group(1)} "
-               f"(not 0). Another firmware update may already be in progress or a "
-               f"previous one did not release cleanly. Proceeding, but if the "
-               f"upload is rejected, wait a few minutes or reset the iDRAC "
-               f"(racadm racreset) and retry.")
+        msg = (f"the iDRAC reports an update semaphore of {sem.group(1)} (not 0). "
+               f"Another firmware update may be in progress, or a previous one did "
+               f"not release cleanly. If nothing is actually running, reset the "
+               f"iDRAC (racadm racreset) and retry, or pass --force to flash anyway.")
+        if force:
+            status(f"WARNING: {msg}\nProceeding because --force was given.")
+        else:
+            fail(f"aborting: {msg}")
 
     # 3. Multipart upload, with live progress. Build the body as a list of
     #    chunks so the ~57 MB image is not duplicated into one giant buffer.
@@ -339,10 +371,24 @@ def main():
     except OSError as e:
         fail(f"upload failed after {time.time()-t0:.0f}s: {e!r}")
     log(f"Upload response: HTTP {code} / {body[:500].decode(errors='replace')}")
-    if code != 200 or b"receivedBytes" not in body:
+    if code != 200:
         fail(f"upload was not confirmed (HTTP {code}) - response: "
              f"{body[:300].decode(errors='replace')}")
-    status(f"Upload complete in {time.time()-t0:.0f}s.")
+    # The whole reason this tool exists is that TFTP transfers arrived
+    # truncated, so don't just check that "receivedBytes" appears, check the
+    # value. Use >= rather than == because it's not verified whether the iDRAC
+    # counts the image bytes or the whole multipart payload (a few hundred
+    # bytes of boundary/headers larger); either way a genuine truncation is
+    # far below len(img) and is what we must catch.
+    rb = re.search(rb"<receivedBytes>(\d+)</receivedBytes>", body)
+    if not rb:
+        fail(f"upload response did not report receivedBytes (HTTP {code}) - response: "
+             f"{body[:300].decode(errors='replace')}")
+    received = int(rb.group(1))
+    if received < len(img):
+        fail(f"upload incomplete: iDRAC received {received} bytes, expected at least "
+             f"{len(img)} (the {len(img)/1_000_000:.1f} MB image). Firmware NOT flashed.")
+    status(f"Upload complete in {time.time()-t0:.0f}s ({received} bytes received).")
 
     # 4. Wait for the image to be validated/staged, and read the version the
     #    staged image reports. That version is our target for verification.

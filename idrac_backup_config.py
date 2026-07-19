@@ -47,7 +47,7 @@ import os
 import sys
 import time
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 
 GROUPS = [
     "cfgLanNetworking",   # iDRAC network config: IP, DNS, VLAN
@@ -88,10 +88,22 @@ def load_env(path):
     return cfg
 
 
-def run_command(chan, cmd, settle=2.5, timeout=15):
-    """Send one racadm command over an already-open shell channel and
-    collect its output. Old iDRAC6 shells don't send a clean EOF marker,
-    so this waits for a quiet period rather than a prompt string."""
+# The iDRAC6 racadm shell echoes a prompt after each command completes. The
+# real hardware uses "/admin1->"; older/other firmware may differ, so this is
+# a best-effort end-of-output signal with a settle-based fallback, not a hard
+# requirement. Returning as soon as the prompt reappears also avoids waiting
+# out the full settle window on every command.
+PROMPT_MARKERS = ("/admin1->", "admin1->", "$ ", "> ")
+
+
+def run_command(chan, cmd, settle=5.0, timeout=30):
+    """Send one racadm command over an already-open shell channel and collect
+    its output. Returns as soon as the shell prompt reappears (command done),
+    falling back to a quiet-period timeout if the prompt isn't recognized, so
+    a slow iDRAC pausing mid-output doesn't get its response cut short. The
+    prompt is the primary end signal; settle is only a fallback for firmware
+    whose prompt isn't in PROMPT_MARKERS (a mid-output pause shorter than
+    settle no longer truncates, since the prompt ends the read either way)."""
     chan.send(cmd + "\n")
     out = ""
     start = time.time()
@@ -100,6 +112,12 @@ def run_command(chan, cmd, settle=2.5, timeout=15):
         if chan.recv_ready():
             out += chan.recv(65536).decode(errors="replace")
             last_data = time.time()
+            # Prompt seen after some output means the command finished. Guard
+            # on len(out) > len(cmd) so the echoed command line itself (which
+            # may end in the prompt on some shells) doesn't end us early.
+            stripped = out.rstrip()
+            if len(out) > len(cmd) + 2 and any(stripped.endswith(m.rstrip()) for m in PROMPT_MARKERS):
+                break
         elif time.time() - last_data > settle:
             break
         else:
@@ -203,6 +221,12 @@ def main():
     )
     with open(outpath, "w", encoding="utf-8") as f:
         f.write(header + "\n".join(sections))
+    # The backup holds network/user/SNMP/IPMI/security config; keep it
+    # owner-only on POSIX. Harmless no-op on Windows (ignores these bits).
+    try:
+        os.chmod(outpath, 0o600)
+    except OSError:
+        pass
 
     print(f"Done. Wrote {outpath}")
     if empty_groups:

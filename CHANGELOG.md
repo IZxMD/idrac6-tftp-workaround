@@ -4,6 +4,44 @@ All notable changes to this project are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-07-19
+
+Second external-review pass. The four highest-priority robustness points were
+implemented; SSH host-key pinning was considered and deliberately left out as
+out of scope for the trusted-management-network model this tool assumes (the
+README security note now says so explicitly rather than calling it a hard
+limit).
+
+### Added
+- `--force` flag on `idrac_flash.py` (1.4.0). A non-zero update semaphore now
+  aborts the flash by default instead of only warning; `--force` downgrades it
+  back to a warning and proceeds. A stale lock after an aborted TFTP attempt
+  is the usual reason you'd need it.
+- New mock scenarios and test cases: truncated upload, non-zero semaphore
+  (with and without `--force`) in `tests/run_test.sh`, and slow blockwise SSH
+  output in `tests/run_test_backup.sh`.
+
+### Fixed
+- Upload completion is now verified numerically: the `<receivedBytes>` value
+  is parsed and the flash aborts if it's smaller than the image sent, instead
+  of only checking that the field is present. This is the exact truncation
+  failure mode (a cut-short transfer) that the whole tool exists to route
+  around, so a short upload must never be flashed.
+- The HTTP client no longer treats every receive error as a clean
+  end-of-response. A `ConnectionResetError` is surfaced (so e.g. a
+  half-received flash-commit reply can't be parsed as a success); the ancient
+  TLS 1.0 stack's unclean close (unexpected-EOF `SSLError`) is still accepted
+  as EOF, since on this hardware that is the normal end of a response.
+- `idrac_backup_config.py` (1.0.2): the racadm-shell reader now ends on the
+  shell prompt (primary) with a longer quiet-period fallback, so a slow iDRAC
+  pausing mid-output no longer silently truncates a config group. This also
+  speeds up the common case (no more waiting out the settle window per
+  command).
+- The flash log and the config backup file are created with `0600`
+  (owner-only) permissions on POSIX, since they can contain internal iDRAC
+  state and full network/user/SNMP/IPMI configuration. Harmless no-op on
+  Windows.
+
 ## [1.3.0] - 2026-07-19
 
 ### Added

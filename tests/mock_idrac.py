@@ -11,6 +11,10 @@ Scenarios:
     happy     (default) full successful flash, version goes 1.98 -> 2.92
     reject    the flash commit (fwUpdate:1) is rejected -> script must fail
     mismatch  reboots but comes back on the OLD version -> script must fail
+    truncated upload "succeeds" but reports far fewer receivedBytes than sent
+              (the original TFTP failure mode) -> script must fail
+    semaphore fwSemStatus comes back non-zero (an update looks in progress)
+              -> script must abort by default, proceed only with --force
 
 This is test scaffolding, not part of the tool itself.
 """
@@ -100,16 +104,22 @@ def handle(conn):
         respond(conn, f"<spfwVer>{state['running_version']}</spfwVer>")
 
     elif method == "GET" and path == "/data?get=fwSemStatus":
-        respond(conn, "<fwSemStatus>0</fwSemStatus>")
+        sem = "1" if SCENARIO == "semaphore" else "0"
+        respond(conn, f"<fwSemStatus>{sem}</fwSemStatus>")
 
     elif method == "POST" and path == "/fwupload/fwupload.esp":
         if not authed:
             respond(conn, "Unauthorized", status="401 Unauthorized")
         elif b'name="firmwareUpdate"' in body and b'name="preConfig"' in body:
-            state["fw_state"] = 1
-            state["staged_version"] = NEW_VERSION
-            respond(conn, f"<receivedBytes>{len(body)}</receivedBytes>")
-            print(f"[mock] upload accepted ({len(body)} B), preConfig present")
+            if SCENARIO == "truncated":
+                # Report a tiny byte count like a cut-short transfer would.
+                respond(conn, "<receivedBytes>1024</receivedBytes>")
+                print(f"[mock] upload TRUNCATED (reported 1024 B of {len(body)})")
+            else:
+                state["fw_state"] = 1
+                state["staged_version"] = NEW_VERSION
+                respond(conn, f"<receivedBytes>{len(body)}</receivedBytes>")
+                print(f"[mock] upload accepted ({len(body)} B), preConfig present")
         else:
             respond(conn, "Bad request format", status="400 Bad Request")
             print("[mock] upload REJECTED (missing field)")

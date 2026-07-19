@@ -68,6 +68,26 @@ run_case "happy path" happy 0 "" "WARNING"
 # One group returns nothing -> still exit 0, but must WARN about it
 run_case "partial output" partial 0 "WARNING"
 
+# Slow output: cfgRacTuning is sent in two halves with a 3s gap (longer than
+# the old 2.5s settle) before the prompt. The late half must still land in the
+# backup file, i.e. the reader waited for the prompt instead of truncating.
+echo "============================================================"
+echo "CASE: slow blockwise output (expect exit 0, full capture)"
+echo "============================================================"
+python3 "$HERE/mock_ssh_idrac.py" "$WORK/host_key.pem" "$PORT" slow > "$WORK/mock.log" 2>&1 &
+MOCK_PID=$!
+sleep 1
+python3 "$ROOT/idrac_backup_config.py" "$WORK/.env" "$WORK/backup_slow.cfg" > "$WORK/slow.out" 2>&1
+got=$?
+kill "$MOCK_PID" 2>/dev/null; wait "$MOCK_PID" 2>/dev/null; MOCK_PID=""
+# cfgSerialTelnetEnable=0 is in the SECOND half of the cfgRacTuning reply.
+if [ "$got" -eq 0 ] && grep -q "cfgSerialTelnetEnable=0" "$WORK/backup_slow.cfg" 2>/dev/null; then
+    echo ">>> PASS (exit $got, late output captured)"; PASS=$((PASS+1))
+else
+    echo ">>> FAIL (exit $got, late output present: $(grep -q "cfgSerialTelnetEnable=0" "$WORK/backup_slow.cfg" 2>/dev/null && echo yes || echo no))"; FAIL=$((FAIL+1))
+fi
+echo ""
+
 # Wrong password -> exit 1
 echo "============================================================"
 echo "CASE: wrong password (expect exit 1)"

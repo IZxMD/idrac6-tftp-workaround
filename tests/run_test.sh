@@ -38,7 +38,7 @@ export IDRAC_STAGE_POLL=1 IDRAC_PROGRESS_POLL=1 IDRAC_REBOOT_POLL=1
 export IDRAC_STAGE_TIMEOUT=15 IDRAC_PROGRESS_TIMEOUT=20 IDRAC_REBOOT_TIMEOUT=20
 
 run_case() {
-    local name="$1" scenario="$2" expect="$3"
+    local name="$1" scenario="$2" expect="$3" extra="${4:-}"
     echo "============================================================"
     echo "CASE: $name (scenario=$scenario, expect exit $expect)"
     echo "============================================================"
@@ -46,7 +46,7 @@ run_case() {
         > "$WORK/mock.log" 2>&1 &
     MOCK_PID=$!
     sleep 1
-    python3 "$ROOT/idrac_flash.py" "$WORK/.env" "$WORK/fake.d6"
+    python3 "$ROOT/idrac_flash.py" "$WORK/.env" "$WORK/fake.d6" $extra
     local got=$?
     kill "$MOCK_PID" 2>/dev/null; wait "$MOCK_PID" 2>/dev/null; MOCK_PID=""
     if [ "$got" -eq "$expect" ]; then
@@ -64,6 +64,13 @@ run_case "happy path" happy 0
 run_case "rejected commit" reject 1
 # iDRAC comes back on the OLD version -> verification mismatch -> exit 1
 run_case "version mismatch" mismatch 1
+# Upload reports far fewer bytes than sent (the TFTP truncation failure mode
+# this whole tool exists for) -> script must catch it -> exit 1
+run_case "truncated upload" truncated 1
+# Update semaphore is non-zero -> abort by default -> exit 1
+run_case "semaphore busy (no force)" semaphore 1
+# ...but --force downgrades it to a warning and the flash proceeds -> exit 0
+run_case "semaphore busy (--force)" semaphore 0 "--force"
 
 # --backup flag: idrac_flash.py should shell out to idrac_backup_config.py
 # first (against a mock racadm/SSH shell) and only then flash. Needs paramiko;
