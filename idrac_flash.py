@@ -10,11 +10,19 @@ possibly other early revisions) that aborts large TFTP transfers after a
 few MB. See README.md for the full root-cause analysis and background.
 
 Usage:
-    python idrac_flash.py <envfile> <firmware_image>
+    python idrac_flash.py <envfile> <firmware_image> [--backup]
     python idrac_flash.py --version
 
 Example:
     python idrac_flash.py .env firmimg.d6
+
+--backup: optionally runs idrac_backup_config.py first, as a subprocess
+(same envfile, default output path). Voluntary and separate on purpose: this
+script imports nothing beyond it; --backup just shells out to the other
+script, so idrac_backup_config.py's paramiko dependency never touches this
+script's own imports. If that script isn't runnable (e.g. paramiko missing),
+the flash is aborted with its error message; run without --backup to skip
+the check and just flash.
 
 envfile format (key:value per line, NOT key=value):
     ip:192.168.1.100
@@ -36,6 +44,7 @@ import os
 import re
 import ssl
 import socket
+import subprocess
 import sys
 import time
 import warnings
@@ -45,7 +54,7 @@ from urllib.parse import quote_plus
 # silence the expected deprecation notice so it doesn't clutter every run.
 warnings.filterwarnings("ignore", message=r".*TLSv1.*", category=DeprecationWarning)
 
-__version__ = "1.1.0"
+__version__ = "1.3.0"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 LOG = open(os.path.join(HERE, "idrac_flash_log.txt"), "a", buffering=1, encoding="utf-8")
@@ -230,13 +239,25 @@ def main():
     if "--version" in sys.argv[1:]:
         print(f"idrac_flash.py {__version__}")
         sys.exit(0)
-    if len(sys.argv) != 3:
-        print(f"Usage: python {os.path.basename(__file__)} <envfile> <firmware_image>")
+
+    do_backup = "--backup" in sys.argv[1:]
+    args = [a for a in sys.argv[1:] if a != "--backup"]
+    if len(args) != 2:
+        print(f"Usage: python {os.path.basename(__file__)} <envfile> <firmware_image> [--backup]")
         print(f"       python {os.path.basename(__file__)} --version")
         sys.exit(2)
 
     global PORT
-    envpath, imgpath = sys.argv[1], sys.argv[2]
+    envpath, imgpath = args[0], args[1]
+
+    if do_backup:
+        status("Backing up current config first (idrac_backup_config.py)...")
+        backup_script = os.path.join(HERE, "idrac_backup_config.py")
+        result = subprocess.run([sys.executable, backup_script, envpath])
+        if result.returncode != 0:
+            fail("config backup failed, aborting flash (run without --backup to skip it)")
+        status("Config backup done, proceeding with flash.")
+
     cfg = load_env(envpath)
     host = cfg["ip"]
     if cfg.get("port"):

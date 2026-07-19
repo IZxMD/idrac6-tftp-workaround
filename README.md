@@ -23,7 +23,7 @@ firmware actually changed to the version that was flashed.
 Example output:
 
 ```
-=== idrac_flash.py 1.1.0 ===
+=== idrac_flash.py 1.3.0 ===
 Image: firmimg.d6 (56.8 MB) -> 192.168.1.100:443
 Image SHA-256: 3f2a...c91b
 Logging in...
@@ -75,12 +75,26 @@ not a backup you could restore from later. `idrac_backup_config.py` is a
 separate, optional script that reads the current config over SSH
 (`racadm getconfig -g <group>` for network, users, RAC security tuning,
 serial/console, SNMP and IPMI settings) and saves it to a local text file,
-so you have your own copy before touching firmware:
+so you have your own copy before touching firmware. Run it on its own:
 
 ```
 python idrac_backup_config.py .env backup.cfg
 python idrac_flash.py .env firmimg.d6
 ```
+
+or let `idrac_flash.py` call it for you with `--backup`:
+
+```
+python idrac_flash.py .env firmimg.d6 --backup
+```
+
+`--backup` just shells out to `idrac_backup_config.py` as a separate process
+before flashing (same envfile, default output filename); it's voluntary and
+kept as a subprocess call rather than an import so `idrac_flash.py` itself
+still has no third-party dependency, only the backup script does. If the
+backup fails (e.g. paramiko missing or SSH login rejected), the flash is
+aborted with that script's error message; run without `--backup` to skip the
+check entirely.
 
 This is the one script in the repo with a dependency: it talks racadm over
 SSH instead of the web interface, which needs `paramiko==2.11.0` specifically
@@ -93,9 +107,9 @@ pip install paramiko==2.11.0
 
 It's a best-effort plain-text snapshot for human reference and disaster
 recovery, not a restorable Lifecycle Controller export (iDRAC6 predates that
-feature). If a config group comes back empty, the script warns you and names
-the group, since your firmware revision may use slightly different group
-names than the ones this script checks by default.
+feature). If a config group comes back empty or errors, the script warns you
+and names the group, since your firmware revision may use slightly different
+group names than the ones this script checks by default.
 
 **Note:** the script confirms the iDRAC card itself came back online with
 the new firmware. It does *not* check the host server's power state. An

@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-07-19
+
+### Added
+- `--backup` flag on `idrac_flash.py`: optionally shells out to
+  `idrac_backup_config.py` as a subprocess before flashing, using the same
+  envfile. Voluntary and a subprocess call rather than an import, so
+  `idrac_flash.py` still has no third-party dependency of its own; only
+  `idrac_backup_config.py` needs `paramiko`, and only when `--backup` is
+  actually used. If the backup fails, the flash is aborted with its error
+  message.
+- `tests/run_test.sh`: a combined-mocks case exercising `--backup` end to
+  end (mock HTTPS iDRAC + mock SSH/racadm shell together).
+
 ## [1.2.0] - 2026-07-18
 
 Adds an optional pre-flash config backup, prompted by a Reddit comment

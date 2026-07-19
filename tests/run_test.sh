@@ -65,6 +65,46 @@ run_case "rejected commit" reject 1
 # iDRAC comes back on the OLD version -> verification mismatch -> exit 1
 run_case "version mismatch" mismatch 1
 
+# --backup flag: idrac_flash.py should shell out to idrac_backup_config.py
+# first (against a mock racadm/SSH shell) and only then flash. Needs paramiko;
+# skipped if it's not installed, same as run_test_backup.sh.
+echo "============================================================"
+echo "CASE: --backup flag (expect exit 0)"
+echo "============================================================"
+SSH_PORT=2223
+python3 -c "
+import paramiko
+key = paramiko.RSAKey.generate(2048)
+key.write_private_key_file('$WORK/host_key.pem')
+" 2>/dev/null && HAVE_PARAMIKO=1 || HAVE_PARAMIKO=0
+if [ "$HAVE_PARAMIKO" -eq 1 ]; then
+    cat > "$WORK/.env.backup" <<EOF
+ip:127.0.0.1
+user:root
+pw:test-pass-123
+port:$PORT
+ssh_port:$SSH_PORT
+EOF
+    python3 "$HERE/mock_idrac.py" "$WORK/cert.pem" "$WORK/key.pem" "$PORT" happy \
+        > "$WORK/mock.log" 2>&1 &
+    MOCK_PID=$!
+    python3 "$HERE/mock_ssh_idrac.py" "$WORK/host_key.pem" "$SSH_PORT" happy \
+        > "$WORK/mock_ssh.log" 2>&1 &
+    MOCK_SSH_PID=$!
+    sleep 1
+    (cd "$WORK" && python3 "$ROOT/idrac_flash.py" "$WORK/.env.backup" "$WORK/fake.d6" --backup)
+    got=$?
+    kill "$MOCK_PID" "$MOCK_SSH_PID" 2>/dev/null; wait "$MOCK_PID" "$MOCK_SSH_PID" 2>/dev/null; MOCK_PID=""
+    if [ "$got" -eq 0 ] && [ -f "$WORK/idrac_config_backup.cfg" ]; then
+        echo ">>> PASS (exit $got, backup file written)"; PASS=$((PASS+1))
+    else
+        echo ">>> FAIL (exit $got, backup file present: $([ -f "$WORK/idrac_config_backup.cfg" ] && echo yes || echo no))"; FAIL=$((FAIL+1))
+    fi
+else
+    echo "paramiko not installed - skipping"
+fi
+echo ""
+
 # Wrong password: mock is up (happy) but the env has a bad password -> exit 1
 echo "============================================================"
 echo "CASE: wrong password (expect exit 1)"
