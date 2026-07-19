@@ -24,6 +24,7 @@ import paramiko
 
 USER = "root"
 PW = "test-pass-123"
+PROMPT = "/admin1-> "
 
 CANNED = {
     "cfgLanNetworking": "cfgNicEnable=1\ncfgNicIpAddress=192.168.1.100\ncfgDNSDomainName=test.local",
@@ -77,7 +78,9 @@ def handle_client(client_sock, host_key):
         return
     server.event.wait(10)
     print("[mock-ssh] shell opened, sending banner")
-    chan.send("iDRAC6 (mock) racadm shell\r\n$ ")
+    # Real iDRAC6 racadm shell uses a "/admin1-> " prompt, \r\r\n line endings,
+    # and echoes each command back before its output.
+    chan.send("iDRAC6 (mock) racadm shell\r\r\n" + PROMPT)
 
     buf = ""
     while True:
@@ -95,17 +98,19 @@ def handle_client(client_sock, host_key):
                 continue
             print(f"[mock-ssh] got command: {cmd!r}")
             reply = handle_command(cmd)
+            echoed = cmd + "\r\r\n"                       # command echo
+            out = reply.replace("\n", "\r\r\n")           # double-CR line endings
             if SCENARIO == "slow" and "-g cfgRacTuning" in cmd and reply:
-                # Send the reply in two halves with a pause longer than the old
+                # Send the output in two halves with a pause longer than the old
                 # 2.5s settle window, then the prompt. A reader that ends on a
                 # quiet period alone would truncate here; one that waits for the
                 # prompt captures the whole thing.
-                mid = len(reply) // 2
-                chan.send(reply[:mid])
+                mid = len(out) // 2
+                chan.send(echoed + out[:mid])
                 time.sleep(3.0)
-                chan.send(reply[mid:] + "\r\n$ ")
+                chan.send(out[mid:] + "\r\r\n" + PROMPT)
             else:
-                chan.send(reply + "\r\n$ ")
+                chan.send(echoed + out + "\r\r\n" + PROMPT)
     chan.close()
     transport.close()
 

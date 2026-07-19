@@ -71,6 +71,12 @@ run_case "truncated upload" truncated 1
 run_case "semaphore busy (no force)" semaphore 1
 # ...but --force downgrades it to a warning and the flash proceeds -> exit 0
 run_case "semaphore busy (--force)" semaphore 0 "--force"
+# Old 1.9x firmware issues no ST2 token; the client must still work with the
+# cookie alone (the happy path already proves it works WITH ST2 required).
+run_case "cookie-only (old firmware)" noauth 0
+# 2.85/2.92-style firmware reports no staged target version; the client must
+# verify by the running version changing (before != after) instead.
+run_case "no staged target version" notarget 0
 
 # --backup flag: idrac_flash.py should shell out to idrac_backup_config.py
 # first (against a mock racadm/SSH shell) and only then flash. Needs paramiko;

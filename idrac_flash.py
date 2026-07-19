@@ -11,10 +11,20 @@ few MB. See README.md for the full root-cause analysis and background.
 
 Usage:
     python idrac_flash.py <envfile> <firmware_image> [--backup] [--force]
+    python idrac_flash.py <envfile> --check
     python idrac_flash.py --version
 
 Example:
     python idrac_flash.py .env firmimg.d6
+
+--check: read-only preflight. Logs in, reads the session token, running
+firmware version and update semaphore, prints them, and exits WITHOUT
+uploading or flashing anything. Safe to run against a live iDRAC any time,
+e.g. to confirm credentials and see the current version before a flash.
+
+Firmware dialects: this speaks both the old 1.9x web API (cookie-only auth,
+version in spfwVer) and the newer 2.x one (ST2 session-token header, version
+in fwVersion). It detects and uses whichever the iDRAC presents.
 
 --backup: optionally runs idrac_backup_config.py first, as a subprocess
 (same envfile, default output path). Voluntary and separate on purpose: this
@@ -60,7 +70,7 @@ from urllib.parse import quote_plus
 # silence the expected deprecation notice so it doesn't clutter every run.
 warnings.filterwarnings("ignore", message=r".*TLSv1.*", category=DeprecationWarning)
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 
 
 def _restrict(path):
@@ -229,30 +239,49 @@ def http(host, method, path, headers=None, body=None, timeout=30, chunk=65536, p
 
 
 def login(host, cfg, timeout=30):
+    """Log in. Returns (cookie, st1, st2) on success, (None, None, None) on
+    failure. Both tokens come from the login response's forwardUrl
+    (index.html?ST1=..,ST2=..). On iDRAC 2.x, st2 is the header token for
+    /data requests, and st1 is the query-string token the firmware-upload
+    POST needs (the real web UI builds the upload action as
+    /fwupload/fwupload.esp?ST1=<st1>; captured from a live 2.92 iDRAC). Older
+    1.9x firmware issues neither and accepts the cookie alone, in which case
+    both are None and simply not sent."""
     login_body = f"user={quote_plus(cfg['user'])}&password={quote_plus(cfg['pw'])}"
     code, head, body = http(host, "POST", "/data/login",
                             {"Content-Type": "application/x-www-form-urlencoded"},
                             login_body, timeout=timeout)
+    btxt = body.decode(errors="replace")
     m = re.search(r"Set-Cookie: (_appwebSessionId_=[^;]+)", head)
-    auth = re.search(r"<authResult>(\d+)</authResult>", body.decode(errors="replace"))
+    auth = re.search(r"<authResult>(\d+)</authResult>", btxt)
     if m and auth and auth.group(1) == "0":
-        return m.group(1)
-    return None
+        st1 = re.search(r"ST1=([0-9a-fA-F]+)", btxt)
+        st2 = re.search(r"ST2=([0-9a-fA-F]+)", btxt)
+        return m.group(1), (st1.group(1) if st1 else None), (st2.group(1) if st2 else None)
+    return None, None, None
 
 
-def ref_headers(host, cookie):
-    return {"Cookie": cookie, "Referer": f"https://{host}/fwupdate.html"}
+def ref_headers(host, cookie, st2=None):
+    h = {"Cookie": cookie, "Referer": f"https://{host}/fwupdate.html"}
+    if st2:
+        h["ST2"] = st2
+    return h
 
 
-def get_spfwver(host, hdr):
-    """Read the spfwVer field. Returns the version string, or None."""
+def get_running_version(host, hdr):
+    """Currently-running iDRAC firmware version. 2.x reports it as fwVersion;
+    older 1.9x used spfwVer. Ask for both and prefer whichever is populated,
+    so this works across firmware revisions. Returns the string, or None."""
     try:
-        _, _, body = http(host, "GET", "/data?get=spfwVer", hdr, timeout=15)
+        _, _, body = http(host, "GET", "/data?get=fwVersion,spfwVer", hdr, timeout=15)
     except OSError:
         return None
-    m = re.search(r"<spfwVer>([^<]*)</spfwVer>", body.decode(errors="replace"))
-    v = m.group(1).strip() if m else ""
-    return v or None
+    txt = body.decode(errors="replace")
+    for field in ("fwVersion", "spfwVer"):
+        m = re.search(rf"<{field}>([^<]*)</{field}>", txt)
+        if m and m.group(1).strip():
+            return m.group(1).strip()
+    return None
 
 
 def sha256_file(path):
@@ -270,16 +299,25 @@ def main():
 
     do_backup = "--backup" in sys.argv[1:]
     force = "--force" in sys.argv[1:]
-    args = [a for a in sys.argv[1:] if a not in ("--backup", "--force")]
-    if len(args) != 2:
-        print(f"Usage: python {os.path.basename(__file__)} <envfile> <firmware_image> [--backup] [--force]")
-        print(f"       python {os.path.basename(__file__)} --version")
-        sys.exit(2)
+    do_check = "--check" in sys.argv[1:]
+    args = [a for a in sys.argv[1:] if a not in ("--backup", "--force", "--check")]
 
     global PORT
-    envpath, imgpath = args[0], args[1]
+    # --check is a read-only preflight and needs no image; a real flash needs one.
+    if do_check:
+        if len(args) != 1:
+            print(f"Usage: python {os.path.basename(__file__)} <envfile> --check")
+            sys.exit(2)
+        envpath, imgpath = args[0], None
+    else:
+        if len(args) != 2:
+            print(f"Usage: python {os.path.basename(__file__)} <envfile> <firmware_image> [--backup] [--force]")
+            print(f"       python {os.path.basename(__file__)} <envfile> --check")
+            print(f"       python {os.path.basename(__file__)} --version")
+            sys.exit(2)
+        envpath, imgpath = args[0], args[1]
 
-    if do_backup:
+    if do_backup and not do_check:
         status("Backing up current config first (idrac_backup_config.py)...")
         backup_script = os.path.join(HERE, "idrac_backup_config.py")
         result = subprocess.run([sys.executable, backup_script, envpath])
@@ -296,32 +334,38 @@ def main():
             fail(f"invalid port in env file: {cfg['port']!r}")
     run_start = time.time()
 
-    if not os.path.isfile(imgpath):
-        fail(f"firmware image not found: {imgpath}")
-    img = open(imgpath, "rb").read()
-    digest = sha256_file(imgpath)
-    status(f"=== idrac_flash.py {__version__} ===")
-    status(f"Image: {imgpath} ({len(img)/1_000_000:.1f} MB) -> {host}:{PORT}")
-    status(f"Image SHA-256: {digest}")
+    if do_check:
+        status(f"=== idrac_flash.py {__version__} --check (read-only, no flash) ===")
+        status(f"Target: {host}:{PORT}")
+    else:
+        if not os.path.isfile(imgpath):
+            fail(f"firmware image not found: {imgpath}")
+        img = open(imgpath, "rb").read()
+        digest = sha256_file(imgpath)
+        status(f"=== idrac_flash.py {__version__} ===")
+        status(f"Image: {imgpath} ({len(img)/1_000_000:.1f} MB) -> {host}:{PORT}")
+        status(f"Image SHA-256: {digest}")
 
     # 1. Login
     status("Logging in...")
     try:
-        cookie = login(host, cfg)
+        cookie, st1, st2 = login(host, cfg)
     except OSError as e:
         fail(f"could not reach {host}:{PORT}: {e!r} (check the ip/port in your "
              f"envfile and that the iDRAC is on the network)")
     if not cookie:
         fail("login rejected (check ip/user/pw in your envfile; iDRAC6 also "
              "limits concurrent sessions, see the README if it keeps failing)")
-    hdr = ref_headers(host, cookie)
-    status("Login OK.")
+    hdr = ref_headers(host, cookie, st2)
+    status(f"Login OK ({'ST2 session token' if st2 else 'cookie-only auth'}).")
 
     # Record the currently-running version for a real before/after comparison.
-    version_before = get_spfwver(host, hdr)
+    version_before = get_running_version(host, hdr)
     status(f"Current firmware (before): {version_before or 'unknown'}")
 
-    # 2. Check the update semaphore and actually act on it.
+    # 2. Read the update semaphore. On firmware that reports it (older 1.9x),
+    #    a non-zero value means another update may be underway; abort unless
+    #    --force. Newer firmware doesn't expose the field, so this is skipped.
     try:
         _, _, body = http(host, "GET", "/data?get=fwSemStatus", hdr)
     except OSError as e:
@@ -329,7 +373,18 @@ def main():
     sem_txt = body.decode(errors="replace")
     log(f"fwSemStatus: {sem_txt.strip()}")
     sem = re.search(r"<fwSemStatus>(\d+)</fwSemStatus>", sem_txt)
-    if sem and sem.group(1) != "0":
+    sem_busy = bool(sem and sem.group(1) != "0")
+
+    if do_check:
+        status(f"Update semaphore: {sem.group(1) if sem else 'not reported by this firmware'}")
+        if version_before:
+            status("Read-only check complete: login, session token and version read all OK. "
+                   "No upload or flash was performed.")
+            sys.exit(0)
+        fail("logged in, but could not read the firmware version. The data endpoint "
+             "may need a different field on this firmware; check idrac_flash_log.txt.")
+
+    if sem_busy:
         msg = (f"the iDRAC reports an update semaphore of {sem.group(1)} (not 0). "
                f"Another firmware update may be in progress, or a previous one did "
                f"not release cleanly. If nothing is actually running, reset the "
@@ -341,19 +396,41 @@ def main():
 
     # 3. Multipart upload, with live progress. Build the body as a list of
     #    chunks so the ~57 MB image is not duplicated into one giant buffer.
-    boundary = "----FwUpdateBoundary7391"
+    # Boundary format matters here, it is not cosmetic. A real 2.92 iDRAC was
+    # captured accepting a 55 MB upload with a long Gecko-style boundary
+    # (27 dashes + digits) and returning 200, while our old short boundary
+    # ("----FwUpdateBoundary...") made the same 55 MB body fail with HTTP 500
+    # at ~6 MB. The iDRAC's Appweb only streams the upload to disk (no 6 MB
+    # request-body limit) when the boundary looks like a real browser's; a
+    # short one falls back to the 6 MB-capped buffered handler. So mimic the
+    # browser: long dash run + a unique numeric suffix.
+    boundary = "-" * 27 + str(int(time.time() * 1000))
     prefix = (
         f"--{boundary}\r\n"
         f"Content-Disposition: form-data; name=\"firmwareUpdate\"; filename=\"firmimg.d6\"\r\n"
         f"Content-Type: application/octet-stream\r\n\r\n").encode()
+    # preConfig is the "preserve configuration" checkbox; the real form submits
+    # it present-but-empty (value=""), which the iDRAC reads as checked. Match
+    # that exactly rather than sending "on".
     suffix = (
         b"\r\n"
-        + f"--{boundary}\r\nContent-Disposition: form-data; name=\"preConfig\"\r\n\r\non\r\n".encode()
+        + f"--{boundary}\r\nContent-Disposition: form-data; name=\"preConfig\"\r\n\r\n\r\n".encode()
         + f"--{boundary}--\r\n".encode())
     body_parts = [prefix, img, suffix]
 
+    # The real 2.x web UI submits this as a plain multipart form POST, which
+    # carries the session token as the ?ST1=<st1> query param, NOT as the ST2
+    # header /data uses (a form POST can't set custom headers). Posting to the
+    # bare path with only the ST2 header gets a 302 -> start.html and the flash
+    # never happens (captured against live 2.92 hardware). So append ?ST1= when
+    # we have it, and drop the ST2 header for the upload. Old 1.9x firmware has
+    # no st1; there the bare cookie-only path is the correct behavior.
     upload_hdr = dict(hdr)
+    upload_hdr.pop("ST2", None)
     upload_hdr["Content-Type"] = f"multipart/form-data; boundary={boundary}"
+    upload_path = "/fwupload/fwupload.esp"
+    if st1:
+        upload_path += f"?ST1={st1}"
 
     last_pct = [-1]
 
@@ -366,7 +443,7 @@ def main():
     status("Uploading firmware image (this can take a few minutes)...")
     t0 = time.time()
     try:
-        code, head, body = http(host, "POST", "/fwupload/fwupload.esp", upload_hdr,
+        code, head, body = http(host, "POST", upload_path, upload_hdr,
                                 body_parts, timeout=UPLOAD_TIMEOUT, progress_cb=upload_progress)
     except OSError as e:
         fail(f"upload failed after {time.time()-t0:.0f}s: {e!r}")
@@ -405,6 +482,11 @@ def main():
         log(f"stage check: {txt.strip()}")
         state = re.search(r"<fwUpdateState>(\d+)</fwUpdateState>", txt)
         if state and state.group(1) == "1":
+            # spfwVer is the staged/target version field on both dialects (unlike
+            # fwVersion, which always reports the still-running, pre-flash
+            # version and so is no use as a target here). If this firmware
+            # doesn't populate it while staged, version_target stays None and
+            # the final check correctly reports UNVERIFIED rather than guessing.
             tv = re.search(r"<spfwVer>([^<]*)</spfwVer>", txt)
             version_target = tv.group(1).strip() if tv and tv.group(1).strip() else None
             staged = True
@@ -467,25 +549,46 @@ def main():
         fail("the iDRAC never went offline to reboot - the flash may not have started. "
              "Check idrac_flash_log.txt and the iDRAC web UI before retrying.")
 
-    # 7. Wait for the iDRAC to come back online
-    status("Waiting for the iDRAC to come back online (this can take a few minutes)...")
+    # 7 + 8. Wait for the iDRAC to come back on the NEW firmware, and verify.
+    #    Do NOT trust the first successful reconnect: on real hardware the web
+    #    interface can briefly drop and return still on the OLD version during
+    #    the flash write, a minute or so before the actual firmware-switch
+    #    reboot. So poll until the RUNNING VERSION reflects the new firmware,
+    #    not just until a login succeeds. This is also the verification:
+    #    - if the firmware reported a staged target version, wait for an exact
+    #      match;
+    #    - if it didn't (some 2.x firmware leaves spfwVer empty while staged),
+    #      success is the running version changing from what it was before the
+    #      flash. A flash that leaves the version unchanged is a real failure
+    #      (or the premature-reconnect blip above), so keep waiting either way.
+    status("Waiting for the iDRAC to come back online on the new firmware "
+           "(this can take a few minutes)...")
     t0 = time.time()
-    new_cookie = None
+    version_after = None
+    verified = False
     while time.time() - t0 < REBOOT_TIMEOUT:
         time.sleep(REBOOT_POLL_INTERVAL)
         try:
-            new_cookie = login(host, cfg, timeout=10)
+            new_cookie, _new_st1, new_st2 = login(host, cfg, timeout=10)
         except OSError:
             new_cookie = None
-        if new_cookie:
+        if not new_cookie:
+            status(f"...still rebooting ({int(time.time()-t0)}s elapsed)")
+            continue
+        v = get_running_version(host, ref_headers(host, new_cookie, new_st2))
+        if v:
+            version_after = v
+        if version_target:
+            if v and v == version_target:
+                verified = True
+                break
+        elif v and version_before and v != version_before:
+            verified = True
             break
-        status(f"...still rebooting ({int(time.time()-t0)}s elapsed)")
-    if not new_cookie:
-        fail(f"iDRAC did not come back within {REBOOT_TIMEOUT}s - check on it manually")
-
-    # 8. Real verification: compare the post-reboot version against the target.
-    hdr = ref_headers(host, new_cookie)
-    version_after = get_spfwver(host, hdr)
+        # Reachable but still the old version (or unreadable) means the real
+        # firmware-switch reboot hasn't happened yet; keep waiting.
+        status(f"...up but not on the new firmware yet "
+               f"(reads {v or 'unknown'}, {int(time.time()-t0)}s elapsed)")
 
     status("=== iDRAC is back online. ===")
     status(f"Firmware before update: {version_before or 'unknown'}")
@@ -493,18 +596,26 @@ def main():
     status(f"Target (staged image):  {version_target or 'unknown'}")
     status(f"Total run time: {int(time.time() - run_start)}s")
 
-    if version_after and version_target and version_after == version_target:
-        status("Verification: SUCCESS - running firmware matches the flashed image.")
+    if verified:
+        if version_target:
+            status("Verification: SUCCESS - running firmware matches the flashed image.")
+        else:
+            status(f"Verification: SUCCESS - firmware changed from {version_before} to "
+                   f"{version_after}. (This firmware doesn't report the staged image "
+                   f"version, so the version change is the confirmation.)")
         sys.exit(0)
-    elif version_after and version_target and version_after != version_target:
+    if version_target and version_after and version_after != version_target:
         fail(f"Verification: MISMATCH - iDRAC is up but reports {version_after!r}, "
              f"not the target {version_target!r}. The flash may not have taken; "
              f"verify manually (web UI / racadm getversion) before relying on it.")
-    else:
-        status("Verification: UNVERIFIED - iDRAC is back online but the version could "
-               "not be read to confirm. Check manually via the web UI or "
-               "`racadm getversion`.")
-        sys.exit(2)
+    if version_after and version_before and version_after == version_before:
+        fail(f"Verification: FAILED - after the flash and the full reboot window the "
+             f"iDRAC still reports {version_after!r} (unchanged from before). The flash "
+             f"did not take; check the web UI / `racadm getversion` before retrying.")
+    status("Verification: UNVERIFIED - iDRAC is back online but the version could "
+           "not be read to confirm. Check manually via the web UI or "
+           "`racadm getversion`.")
+    sys.exit(2)
 
 
 if __name__ == "__main__":

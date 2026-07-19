@@ -4,6 +4,71 @@ All notable changes to this project are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-07-19
+
+Real-hardware reverse-engineering pass. Captured the actual on-the-wire
+behavior of a live iDRAC6 (login/data traffic and racadm shell output) and
+made the tool and the mocks match reality instead of assumptions. This
+surfaced two real gaps the old mocks had hidden.
+
+### Added
+- `idrac_flash.py` (1.5.0) now speaks both iDRAC web-API dialects: the newer
+  2.x one requires the `ST2` session token (from the login response's
+  forwardUrl) as an HTTP header on authenticated `/data` requests and reports
+  the running version as `fwVersion`; the older 1.9x accepted the cookie
+  alone and used `spfwVer`. The client detects and uses whichever is present,
+  so it works across firmware revisions.
+- `--check` flag on `idrac_flash.py`: a read-only preflight that logs in,
+  reads the session token, running version and update semaphore, prints them
+  and exits without uploading or flashing. Safe to run against a live iDRAC;
+  verified against real 2.92 hardware.
+- `tests/capture_idrac.py`: a read-only diagnostic that records how your own
+  iDRAC answers the endpoints this tool uses, so you can check the mock (and
+  the parser) against your firmware revision.
+- New mock scenarios: `noauth` (models 1.9x cookie-only firmware) in the web
+  mock; the racadm mock now echoes commands, uses the real `/admin1->` prompt
+  and `\r\r\n` line endings.
+
+### Fixed
+- Post-flash verification and reboot detection, both found flashing real
+  hardware end to end (1.98 -> 2.85 -> 2.92). The client no longer trusts the
+  first successful reconnect: during the flash write the web interface can
+  briefly drop and return still on the OLD version a minute before the real
+  firmware-switch reboot, which made the tool report the old version as final.
+  It now polls until the running version actually reflects the new firmware.
+  That same loop is the verification: when the firmware reports no staged
+  target version (real 2.85/2.92 leave spfwVer empty), success is the running
+  version changing from before the flash; a version that stays unchanged after
+  the full reboot window is now a clear FAILED instead of a vague UNVERIFIED.
+  New `notarget` mock scenario covers the empty-staged-version path.
+- The firmware upload itself, which failed against 2.x with the ST-token auth
+  fixed. Three separate real problems, all found by capturing live traffic:
+  (1) the upload POST needs the session token as a `?ST1=<st1>` query param
+  (a plain form POST can't set the ST2 header); without it the iDRAC 302s to
+  start.html. (2) With that fixed, a full image failed with HTTP 500 at ~6 MB:
+  the short multipart boundary made the iDRAC's Appweb buffer the body against
+  its 6 MB request-body limit. A captured real browser upload sent the same
+  55 MB image, same `?ST1=` URL and same `Content-Length` and got 200, the
+  only pre-failure difference being a long Gecko-style boundary (long dash run
+  + digits) that routes the request to Appweb's streaming upload handler. The
+  client now uses that boundary format. (3) preConfig is now sent present but
+  empty (value ""), matching the real form's checkbox, instead of "on".
+- Auth against 2.x firmware: the client previously sent only the session
+  cookie and would get 401 on every authenticated request against firmware
+  that requires the ST2 token. It now extracts and sends ST2.
+- Version detection against 2.x firmware: the running version is read from
+  `fwVersion` (with `spfwVer` fallback) instead of `spfwVer` alone, which is
+  empty on newer firmware.
+- `idrac_backup_config.py` (1.0.3): empty-group detection now strips the
+  echoed command and the shell prompt from each command's output before
+  deciding a group is empty. Real racadm output always includes those two
+  lines, so the previous check would never have flagged a genuinely empty
+  group on real hardware. Config backups are also cleaner (no shell noise).
+- The web mock now reflects real behavior: responses wrapped as
+  `<root>...<status>ok</status></root>`, the `Mbedthis-Appweb/2.4.2` server
+  header, login returning an ST1/ST2 forwardUrl, and ST2 required on
+  authenticated requests, so the tests actually exercise the real auth path.
+
 ## [1.4.0] - 2026-07-19
 
 Second external-review pass. The four highest-priority robustness points were

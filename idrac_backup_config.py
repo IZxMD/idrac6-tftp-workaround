@@ -47,7 +47,7 @@ import os
 import sys
 import time
 
-__version__ = "1.0.2"
+__version__ = "1.0.3"
 
 GROUPS = [
     "cfgLanNetworking",   # iDRAC network config: IP, DNS, VLAN
@@ -94,6 +94,26 @@ def load_env(path):
 # requirement. Returning as soon as the prompt reappears also avoids waiting
 # out the full settle window on every command.
 PROMPT_MARKERS = ("/admin1->", "admin1->", "$ ", "> ")
+
+
+def clean_lines(out, cmd):
+    """Extract the real config lines from one racadm command's output.
+    The iDRAC shell echoes the command back and ends with a prompt like
+    '/admin1->', so a genuinely empty group still comes back with those two
+    lines. Strip the echoed command, the prompt, and blank/$/> noise so an
+    empty group is actually seen as empty (and the file isn't cluttered)."""
+    cmdstrip = cmd.strip()
+    lines = []
+    for ln in out.splitlines():
+        s = ln.strip()
+        if not s or s in ("$", ">"):
+            continue
+        if s == cmdstrip:                       # echoed command
+            continue
+        if s.endswith("->") or "admin1->" in s:  # shell prompt
+            continue
+        lines.append(s)
+    return lines
 
 
 def run_command(chan, cmd, settle=5.0, timeout=30):
@@ -190,23 +210,20 @@ def main():
                 slot_bodies = []
                 has_error = False
                 for i in indices:
-                    out = run_command(chan, f"racadm getconfig -g {group} -i {i}")
-                    lines = [ln for ln in out.strip().splitlines() if ln.strip() not in ("", "$", ">")]
-                    if any(ln.strip().startswith("ERROR:") for ln in lines):
+                    cmd = f"racadm getconfig -g {group} -i {i}"
+                    lines = clean_lines(run_command(chan, cmd), cmd)
+                    if any(ln.startswith("ERROR:") for ln in lines):
                         has_error = True
                     slot_bodies.append(f"--- index {i} ---\n" + ("\n".join(lines) if lines else "(no output)"))
                 if has_error:
                     empty_groups.append(group)
                 body = "\n".join(slot_bodies)
             else:
-                out = run_command(chan, f"racadm getconfig -g {group}")
-                # Strip trailing shell-prompt noise (e.g. a lone "$" or ">" the
-                # iDRAC shell echoes back) so a truly empty response is detected
-                # as empty instead of "one line of prompt junk".
-                content_lines = [ln for ln in out.strip().splitlines() if ln.strip() not in ("", "$", ">")]
-                if not content_lines or any(ln.strip().startswith("ERROR:") for ln in content_lines):
+                cmd = f"racadm getconfig -g {group}"
+                content = clean_lines(run_command(chan, cmd), cmd)
+                if not content or any(ln.startswith("ERROR:") for ln in content):
                     empty_groups.append(group)
-                body = "\n".join(content_lines) if content_lines else "(no output)"
+                body = "\n".join(content) if content else "(no output)"
             sections.append(f"===== racadm getconfig -g {group} =====\n{body}\n")
     finally:
         client.close()

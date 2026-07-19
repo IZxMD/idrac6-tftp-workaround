@@ -23,7 +23,7 @@ firmware actually changed to the version that was flashed.
 Example output:
 
 ```
-=== idrac_flash.py 1.4.0 ===
+=== idrac_flash.py 1.5.0 ===
 Image: firmimg.d6 (56.8 MB) -> 192.168.1.100:443
 Image SHA-256: 3f2a...c91b
 Logging in...
@@ -74,6 +74,48 @@ image). If the iDRAC's update semaphore is non-zero when you start (another
 update in progress, or a stale lock from an earlier aborted attempt), the
 flash aborts by default; clear it with `racadm racreset`, or pass `--force`
 to flash anyway.
+
+### Check first (read-only)
+
+Before flashing, you can confirm the script can talk to your iDRAC and see
+what firmware it's on, without uploading or changing anything:
+
+```
+python idrac_flash.py .env --check
+```
+
+This logs in, reads the session token and the running firmware version, and
+exits. Nothing is uploaded or flashed. Example:
+
+```
+=== idrac_flash.py 1.5.0 --check (read-only, no flash) ===
+Target: 192.168.1.100:443
+Logging in...
+Login OK (ST2 session token).
+Current firmware (before): 2.92 (Build 05)
+Update semaphore: not reported by this firmware
+Read-only check complete: login, session token and version read all OK.
+```
+
+### Firmware dialects
+
+iDRAC6's web API changed slightly across firmware. Old 1.9x revisions accept
+the session cookie alone and report the running version in `spfwVer`; newer
+2.x revisions require the `ST2` session token (from the login response) as a
+request header and report the version in `fwVersion`. The script detects and
+uses whichever the iDRAC presents, so it works on both. This was reverse
+engineered from real captured traffic, not guessed; `tests/capture_idrac.py`
+is a read-only tool that records how your own iDRAC answers, so you can check
+it against your revision.
+
+On 2.x firmware the upload has two more real requirements, both found by
+capturing a working browser upload and both easy to get wrong: the upload
+`POST` must carry the session token as a `?ST1=<token>` query parameter (a
+plain form post can't set the header the `/data` calls use), and the
+multipart boundary must be a long, browser-style one. A short boundary makes
+the iDRAC's Appweb buffer the whole body against a ~6 MB request-body limit
+and return HTTP 500 partway through the upload; a long boundary routes it to
+the streaming upload handler with no such limit. The script does both.
 
 ### Optional: back up the current config first
 
