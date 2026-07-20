@@ -272,10 +272,17 @@ without issue.
    reboot once there's actual evidence the flash started, so a transient
    network blip isn't mistaken for success.
 6. **Wait for the reboot** — retries logging back in until the iDRAC
-   responds again.
-7. **Verify** — reads `spfwVer` after the reboot and compares it against the
-   version the staged image reported in step 3. It reports SUCCESS only if
-   they match; a wrong-version comeback is flagged as a failure.
+   responds again. The first successful reconnect isn't trusted by itself:
+   on real hardware the web interface can briefly drop and come back
+   reachable, still on the OLD version, a minute or more before the actual
+   firmware-switch reboot happens. So this keeps polling the running
+   version, not just reachability.
+7. **Verify** — compares the running version against the target the staged
+   image reported in step 3. If the firmware never reported a target (some
+   2.x revisions leave that field empty even while staged), success is
+   instead the running version having changed from what it was before the
+   flash. Either way, a version that comes back unchanged after the full
+   reboot window is reported as a real failure, not a vague "done".
 
 ## Other files
 
@@ -318,9 +325,11 @@ without issue.
 
 This talks to old, no-longer-updated embedded firmware over deliberately
 weakened TLS settings, and triggers a firmware flash on your management
-controller. It worked reliably in testing on an iDRAC6 Enterprise card
-(PowerEdge R710) going from 1.98 to 2.92, but there is always some risk in
-flashing management firmware remotely. Make sure you have a working
+controller. It worked reliably in testing on an iDRAC6 Enterprise card (PowerEdge R710)
+across a full real chain: 2.92 down to 1.98, then back up through 2.85 to
+2.92 again, exercising both the old cookie-only dialect and the newer
+ST1/ST2 one — but there is always some risk in flashing management firmware
+remotely. Make sure you have a working
 out-of-band way to recover (physical/local access, another admin on site)
 before you rely on this against a server you can't walk up to. Use at your
 own risk. Not affiliated with or endorsed by Dell.
