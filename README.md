@@ -25,7 +25,7 @@ firmware actually changed to the version that was flashed.
 Example output:
 
 ```
-=== idrac_flash.py 1.5.0 ===
+=== idrac_flash.py 1.5.1 ===
 Image: firmimg.d6 (56.8 MB) -> 192.168.1.100:443
 Image SHA-256: 3f2a...c91b
 Logging in...
@@ -90,7 +90,7 @@ This logs in, reads the session token and the running firmware version, and
 exits. Nothing is uploaded or flashed. Example:
 
 ```
-=== idrac_flash.py 1.5.0 --check (read-only, no flash) ===
+=== idrac_flash.py 1.5.1 --check (read-only, no flash) ===
 Target: 192.168.1.100:443
 Logging in...
 Login OK (ST2 session token).

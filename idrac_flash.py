@@ -70,7 +70,7 @@ from urllib.parse import quote_plus
 # silence the expected deprecation notice so it doesn't clutter every run.
 warnings.filterwarnings("ignore", message=r".*TLSv1.*", category=DeprecationWarning)
 
-__version__ = "1.5.0"
+__version__ = "1.5.1"
 
 
 def _restrict(path):
