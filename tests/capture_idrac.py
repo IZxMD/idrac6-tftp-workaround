@@ -171,7 +171,14 @@ def main():
         print("WARNING: no session cookie returned - login may have failed; "
               "the reads below will likely be unauthorized. Capturing anyway.")
 
+    # Newer (2.x) firmware requires the ST2 token from the login response's
+    # forwardUrl as a header on every authenticated /data read, same as
+    # idrac_flash.py. Without it every GET below 401s on that firmware; old
+    # 1.9x firmware issues no ST2 and the cookie alone is enough.
+    st2 = re.search(r"ST2=([0-9a-fA-F]+)", raw.decode(errors="replace"))
     hdr = {"Cookie": cookie, "Referer": f"https://{host}/fwupdate.html"} if cookie else {}
+    if st2:
+        hdr["ST2"] = st2.group(1)
 
     # 2. The read-only GETs.
     for path in READONLY_GETS:

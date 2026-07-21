@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- `tests/capture_idrac.py` never sent the ST2 session-token header on its
+  read-only GETs after login, only the cookie. Against 2.x firmware (which
+  requires ST2, see the 1.5.0 entry below) every read 401'd, so the tool
+  meant to help diagnose other firmware revisions was itself broken on the
+  exact dialect that most needs it. Found by actually running it against a
+  live 2.92 iDRAC while testing the new bug report template, not by
+  inspection. Now extracts ST2 from the login response the same way
+  `idrac_flash.py` does and sends it on every read.
+
 ### Added
 - `.github/ISSUE_TEMPLATE/bug_report.md`: asks for `--check` output, card
   type (Enterprise/Express) and firmware revision, since only an Enterprise
