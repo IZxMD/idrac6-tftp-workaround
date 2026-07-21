@@ -108,6 +108,12 @@ engineered from real captured traffic, not guessed; `tests/capture_idrac.py`
 is a read-only tool that records how your own iDRAC answers, so you can check
 it against your revision.
 
+Only tested against an iDRAC6 Enterprise card so far (1.98, 2.85, 2.92). If
+you hit something odd on an Express card or another firmware revision,
+`--check`'s output plus `tests/capture_idrac.py`'s output are the two things
+that actually help track it down, please open an issue with those attached
+(there's a bug report template that asks for exactly that).
+
 On 2.x firmware the upload has two more real requirements, both found by
 capturing a working browser upload and both easy to get wrong: the upload
 `POST` must carry the session token as a `?ST1=<token>` query parameter (a

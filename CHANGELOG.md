@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- `.github/ISSUE_TEMPLATE/bug_report.md`: asks for `--check` output, card
+  type (Enterprise/Express) and firmware revision, since only an Enterprise
+  card has been tested so far and coverage on other revisions depends on
+  bug reports carrying the right diagnostics.
+- `SECURITY.md`: how to report a real vulnerability, and which files (config
+  backups) are sensitive and shouldn't be posted publicly. `idrac_flash_log.txt`
+  is explicitly called out as safe to attach, it never logs the password or
+  session cookie/token.
+
 ### Removed
 - `idrac_web_explore.py`. Deprecated and unused: `tests/capture_idrac.py`
   covers the same job (recording how your iDRAC answers the endpoints
