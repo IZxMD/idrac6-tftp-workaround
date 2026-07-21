@@ -286,13 +286,13 @@ without issue.
 
 ## Other files
 
-- `idrac_web_explore.py <envfile>` — helper that logs in and lists the
-  `data?get=`/`data?set=` endpoints referenced on the update page. Only
-  needed if a different iDRAC6 firmware version changes something and
-  `idrac_flash.py` needs updating to match.
 - `idrac_backup_config.py <envfile> [output.cfg]` — optional pre-flash config
   backup over SSH/racadm. See "Optional: back up the current config first"
   above. The only script here with a third-party dependency (`paramiko`).
+- `tests/capture_idrac.py <envfile>` — read-only diagnostic that records how
+  your own iDRAC answers the endpoints `idrac_flash.py` uses. Useful if a
+  different firmware revision changes something and the script needs
+  updating to match; see "Firmware dialects" above.
 
 ## Security considerations
 

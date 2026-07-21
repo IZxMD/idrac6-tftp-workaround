@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format is based
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Removed
+- `idrac_web_explore.py`. Deprecated and unused: `tests/capture_idrac.py`
+  covers the same job (recording how your iDRAC answers the endpoints
+  `idrac_flash.py` uses) more thoroughly, and is what the README already
+  points to for that purpose.
+
 ## [1.5.0] - 2026-07-19
 
 Real-hardware reverse-engineering pass. Captured the actual on-the-wire
