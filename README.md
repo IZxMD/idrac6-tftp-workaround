@@ -7,6 +7,8 @@ server required, and no babysitting either: it logs in, uploads, triggers
 the flash, watches it through the reboot, and then verifies the running
 firmware actually changed to the version that was flashed.
 
+![demo](demo.gif)
+
 ## Usage
 
 1. Extract the `.d6` firmware image from Dell's `.EXE` package (the ESM/
